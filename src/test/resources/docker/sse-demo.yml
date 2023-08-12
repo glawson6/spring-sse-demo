@@ -1,0 +1,27 @@
+version: "3.3"
+services:
+  sse-demo:
+    image: "sse/spring-sse-demo:latest"
+    ports:
+      - "8080:8080"
+      #- "51000-52000:51000-52000"
+
+    env_file:
+      - local.env
+
+    environment:
+      - REDIS_REPLICATION_MODE=master
+      - SPRING_PROFILES_ACTIVE=default
+      - REDIS_HOST=172.28.1.79
+      - REDIS_PORT=6379
+      - KAFKA_BOOTSTRAP_SERVERS=172.28.1.93:9093
+
+    networks:
+      node_net:
+        ipv4_address: 172.28.1.12
+
+networks:
+  node_net:
+    external:
+      name: docker_node_net
+
