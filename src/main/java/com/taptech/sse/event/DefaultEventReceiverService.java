@@ -176,7 +176,18 @@ public class DefaultEventReceiverService implements EventReceiverService {
 				.map(id -> Tuples.of(StreamOffset.create(clientId, ReadOffset.lastConsumed()),
 						Consumer.from(clientId, clientId),
 						new DurationSupplier(Duration.of(sseProperties.getClientHoldSeconds(), ChronoUnit.SECONDS), LocalDateTime.now())))
-				.flatMap(tuple3 -> findClientNotificationEvents(tuple3.getT2(), tuple3.getT1(), tuple3.getT3()));
+				.flatMap(tuple3 -> findClientNotificationEvents(tuple3.getT2(), tuple3.getT1(), tuple3.getT3()))
+				.doAfterTerminate(new Runnable() {
+					@Override
+					public void run() {
+						try{
+							redisTemplate.opsForHash().delete(calculateHashKey.apply(clientId)).subscribe();
+						} catch (Exception e){
+							logger.warn("Could not delete clientId");
+						}
+
+					}
+				});
 
 	}
 
@@ -184,14 +195,14 @@ public class DefaultEventReceiverService implements EventReceiverService {
 		return this.redisTemplate.opsForHash().put(calculateHashKey.apply(id), CLIENT_STREAM_STARTED, Boolean.TRUE.toString()).map(val -> id);
 	}
 
-	public Flux<Boolean> deleteWorkspaceStream(String workspaceId){
-		StreamOffset<String> streamOffset = StreamOffset.create(workspaceId, ReadOffset.lastConsumed());
+	public Flux<Boolean> deleteWorkspaceStream(String clientId){
+		StreamOffset<String> streamOffset = StreamOffset.create(clientId, ReadOffset.lastConsumed());
 		StreamReadOptions streamReadOptions = StreamReadOptions.empty().noack();
-		Consumer consumer = Consumer.from(workspaceId, workspaceId);
+		Consumer consumer = Consumer.from(clientId, clientId);
 
 		return this.redisTemplate.opsForStream().read(String.class, consumer, streamReadOptions, streamOffset)
-				.flatMap(objRecord -> this.redisTemplate.opsForStream().delete(workspaceId,objRecord.getId()).map(val -> objRecord))
-				.flatMap(objRecord -> this.redisTemplate.opsForHash().delete(workspaceId));
+				.flatMap(objRecord -> this.redisTemplate.opsForStream().delete(clientId,objRecord.getId()).map(val -> objRecord))
+				.flatMap(objRecord -> this.redisTemplate.opsForHash().delete(clientId));
 	}
 
 	@Override

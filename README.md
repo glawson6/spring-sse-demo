@@ -1,4 +1,4 @@
-# Reactive Event Streaming Architecture with Kafka, Redis Streams, and HTTP Server-Sent Events (SSE)
+# Reactive Event Streaming Architecture with Kafka, Redis Streams, Spring Boot and HTTP Server-Sent Events (SSE)
 This document outlines a solution for streaming events from Kafka, forwarding them to Redis using its Stream API, and reading individual streams from Redis via its streaming API. The added complexity in this scenario is the need to stream events from an HTTP endpoint using Server-Sent Events (SSE) while ensuring that only events relevant to a specific client ID are processed and sent.
 
 
@@ -53,7 +53,7 @@ flowchart TB
 
   ```
 
-![Solution Architecture](mermaid-diagram-flow.png "Solution Architecture")
+![Solution Architecture](reactive-streams-sse-demo.png "Solution Architecture")
 
 
 ## Redis Streams 
@@ -157,9 +157,9 @@ networks:
             - subnet: 172.28.0.0/16
 
 ```
-sse-demo.yml
+Create the yaml for the application 'sse-demo.yml'
 ```yaml
-version: "3.3"
+version: "3.8"
 services:
   sse-demo:
     image: "sse/spring-sse-demo:latest"
@@ -267,18 +267,7 @@ public class DefaultEventReceiverService implements EventReceiverService {
 
 		this.redisTemplate.opsForValue().append(TEST_STREAM_KEY, TEST_STREAM_VALUE).subscribe();
 
-		/*
-		ObjectRecord<String, String> record = StreamRecords.newRecord()
-			.ofObject(TEST_STREAM_VALUE)
-			//.withStreamKey(recRecord.key());
-			.withStreamKey(TEST_STREAM_KEY);
-		this.redisTemplate.opsForStream().add(record)
-				.subscribe(recordId -> logger.info("################# Got recordId => {}",recordId.toString()));
-
-		this.redisTemplate.opsForStream().read(String.class,StreamOffset.fromStart(TEST_STREAM_KEY))
-				.subscribe(objrec -> logger.info("################### Read value => {}",objrec.getValue()));
-
-		 */
+	
 
 	}
 
@@ -313,7 +302,6 @@ public class DefaultEventReceiverService implements EventReceiverService {
 		ObjectRecord<String, String> record = StreamRecords.newRecord()
 				.ofObject(recRecord.value())
 				.withStreamKey(recRecord.key());
-		//.withStreamKey("workspaces");
 		return this.redisTemplate.opsForStream().add(record)
 				.map(recId -> Tuples.of(recId, recRecord));
 	}
@@ -343,32 +331,6 @@ public class DefaultEventReceiverService implements EventReceiverService {
 				.onErrorResume((error) -> Mono.just(workspaceId));
 	}
 
-	/*
-	public Flux<WorkspaceEvent> consume(String workspaceId) {
-
-		StreamOffset<String> streamOffset = StreamOffset.create(workspaceId, ReadOffset.lastConsumed());
-
-		Consumer consumer = Consumer.from(workspaceId, workspaceId);
-
-		try {
-			redisTemplate.getConnectionFactory().getReactiveConnection().streamCommands()
-					.xGroupCreate(ByteBuffer.wrap(workspaceId.getBytes()), workspaceId, ReadOffset.from("0-0"), true)
-					.subscribe(str -> logger.info("Group created => {}", str));
-		} catch (Exception e) {
-			if (logger.isDebugEnabled()){
-				logger.debug("Could not create group.",e);
-			}
-		}
-
-		DurationSupplier booleanSupplier = new DurationSupplier(Duration.of(sseProperties.getClientHoldSeconds(), ChronoUnit.SECONDS), LocalDateTime.now());
-
-
-		return this.redisTemplate.opsForStream().read(String.class, consumer, streamReadOptions, streamOffset)
-				.map(convertToWorkspaceEvent())
-				.repeat(booleanSupplier);
-	}
-
-	 */
 
 	private Flux<NotificationEvent> findClientNotificationEvents(Consumer consumer, StreamOffset<String> streamOffset, DurationSupplier booleanSupplier){
 		return this.redisTemplate.opsForStream().read(String.class, consumer, streamReadOptions, streamOffset)
@@ -447,6 +409,7 @@ Using the `kubernetes-maven-plugin` from jkube, create the image for your Spring
 
 ### 6. Start the Services and Run the Application
 
+From the src/test/resources/docker directory
 
 Start the services:
 ```bash
@@ -473,7 +436,16 @@ http POST http://localhost:8080/sse/generateNE
 ```
 After this watch as your http client recieves an event for the clientId that it is subscribed.
 
-
+## Discussion
+A decision was made to limit the events being pushed into redis based on wether there was a client actually 
+expecting a message. If there were no clients then kafka messages were being filtered out.
+```java
+	.filterWhen(record -> checkIfStreamBeingAccessed(record))
+```
+The client registers the id so that the kafka listener will push the to redis stream. 
+```java
+.flatMap(id -> addIdToStream(clientId))
+```
 
 ## Conclusion
 
