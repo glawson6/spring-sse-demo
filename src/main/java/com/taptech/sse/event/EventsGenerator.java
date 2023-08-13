@@ -38,7 +38,7 @@ public class EventsGenerator {
 
     private static final Logger logger = LoggerFactory.getLogger(EventsGenerator.class);
 
-    private static final String idsPath = "classpath:ids.json";
+    private static final String idsPath = "classpath:client-ids.json";
 
     private KafkaSender<String, String> sender;
     private SimpleDateFormat dateFormat;

@@ -1,6 +1,62 @@
-# Event Streaming with Redis Streams and Kafka using Spring Boot and Docker Compose  - Solution Document
-In this document, we'll outline how to set up an event streaming architecture using Spring Boot, Docker, Redis Streams, and Kafka. The goal is to consume events from Kafka, send them to Redis via its Stream API, and then read the individual streams from Redis using its Stream API. 
+# Reactive Event Streaming Architecture with Kafka, Redis Streams, and HTTP Server-Sent Events (SSE)
+This document outlines a solution for streaming events from Kafka, forwarding them to Redis using its Stream API, and reading individual streams from Redis via its streaming API. The added complexity in this scenario is the need to stream events from an HTTP endpoint using Server-Sent Events (SSE) while ensuring that only events relevant to a specific client ID are processed and sent.
 
+
+
+## Problem Statement
+We have an existing Kafka infrastructure where events are being produced. Our goal is to set up a system that subscribes to Kafka messages but only processes events relevant to a specific client ID. These filtered events should be forwarded to Redis using its Stream API. Additionally, we need to establish an HTTP endpoint for Server-Sent Events (SSE) that allows the specified client to receive real-time event updates.
+
+
+
+## Solution Architecture Overview
+
+The architecture consists of the following components:
+
+1. **Kafka**: A distributed event streaming platform that allows you to publish and subscribe to streams of records (events).
+
+2. **Spring Boot**: A framework for building Java applications. We'll use it to create Kafka consumers and Redis Stream producers.Subscribes to Kafka messages, filters events based on the client ID, and forwards relevant events to Redis Streams.
+
+3. **Redis**: A high-performance, in-memory data store. We'll use its Streams feature to handle event streams.Stores the streamed events using its Streams API.
+
+4. **Docker**: A containerization platform. We'll use Docker and Docker-Compose to create containers for Kafka, Redis, and our Spring Boot application.
+
+5. **HTTP Server-Sent Events (SSE) Endpoint**: Provides real-time event updates to the client, filtering events based on the client ID.
+
+```
+flowchart TB
+  subgraph Kafka
+    K
+  end
+
+  subgraph Spring Boot Application
+    B[[Kafka Reciever]]
+    C[[Redis Stream API]]
+    SSE[<u>Controller</u>]
+  end
+
+  subgraph Redis
+    R[<u>Redis</u>]
+  end
+
+  subgraph HTTP Client
+    HC[<u>HTTP Client</u>]
+  end
+
+  K --> |Events | B
+  B --> C
+  C --> R
+
+
+  HC -->|HTTP GET| SSE
+  SSE --> |SSE | HC
+  SSE --> C
+
+  ```
+
+![Solution Architecture](mermaid-diagram-flow.png "Solution Architecture")
+
+
+## Redis Streams 
 Redis Streams is a feature in Redis that provides a way to handle real-time data streams with various use cases. Here are some scenarios where you might want to use Redis Streams:
 
 **Real-Time Event Processing**: Redis Streams are excellent for processing and storing real-time events. You can use it for things like logging, monitoring, tracking user activities, or any use case that involves handling a continuous stream of events.
@@ -20,27 +76,17 @@ Redis Streams is a feature in Redis that provides a way to handle real-time data
 **Stream Processing**: If you need to process a continuous stream of data in a specific order (for example, financial transactions or sensor readings), Redis Streams can help you manage the data in the order it was received.
 
 
-## Architecture Overview
-
-The architecture consists of the following components:
-
-1. **Kafka**: A distributed event streaming platform that allows you to publish and subscribe to streams of records (events).
-
-2. **Spring Boot**: A framework for building Java applications. We'll use it to create Kafka consumers and Redis Stream producers.
-
-3. **Redis**: A high-performance, in-memory data store. We'll use its Streams feature to handle event streams.
-
-4. **Docker**: A containerization platform. We'll use Docker to create containers for Kafka, Redis, and our Spring Boot application.
-   Sure, here's a solution document in Markdown format that outlines how to implement the described architecture using Spring Boot, Docker Compose, Redis, and Kafka:
 
 ## Prerequisites
 
 - Docker and Docker Compose are installed.
 - Basic understanding of Spring Boot, Redis Streams, and Kafka.
+- Java 17 or higher
+- An http client of your choice. I used [httpie](https://httpie.io/docs/cli/installation)
 
 ## Steps
 
-### 1. Set Up Docker Compose for the backend infrastructure
+### 1. Set Up Docker Compose for the backend infrastructure and the spring boot app
 
 Create a `docker-compose.yml` file to define the services:
 
@@ -111,15 +157,44 @@ networks:
             - subnet: 172.28.0.0/16
 
 ```
+sse-demo.yml
+```yaml
+version: "3.3"
+services:
+  sse-demo:
+    image: "sse/spring-sse-demo:latest"
+    ports:
+      - "8080:8080"
+      #- "51000-52000:51000-52000"
+
+    env_file:
+      - local.env
+
+    environment:
+      - REDIS_REPLICATION_MODE=master
+      - SPRING_PROFILES_ACTIVE=default
+      - REDIS_HOST=172.28.1.79
+      - REDIS_PORT=6379
+      - KAFKA_BOOTSTRAP_SERVERS=172.28.1.93:9093
+
+    networks:
+      node_net:
+        ipv4_address: 172.28.1.12
+
+networks:
+  node_net:
+    external:
+      name: docker_node_net
+
+
+```
 
 ### 2. Create Spring Boot Application
 
 Create a Spring Boot application with the required dependencies:
 
 ```bash
-mkdir event-streaming-app
-cd event-streaming-app
-touch Dockerfile
+git checkout https://github.com/glawson6/spring-sse-demo.git
 ```
 
 In `pom.xml`, add the necessary dependencies for Kafka and Redis integration.
@@ -339,9 +414,27 @@ public class DefaultEventReceiverService implements EventReceiverService {
 Configure Redis Stream in the `application.properties` file:
 
 ```properties
-spring.redis.host=redis
-spring.redis.port=6379
-spring.redis.stream.key=events-stream
+cache.provider.name=redis
+cache.host=${REDIS_HOST:localhost}
+cache.port=${REDIS_PORT:6379}
+cache.password=password
+
+
+# Producer properties
+spring.kafka.producer.bootstrap-servers=127.0.0.1:9092
+spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer
+spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer
+spring.kafka.producer.group-id=group_id
+spring.kafka.boostrap.servers=${KAFKA_BOOTSTRAP_SERVERS:loclahost:9093}
+
+
+# Common Kafka Properties
+auto.create.topics.enable=true
+sse.client-hold-seconds=${SSE_CLIENT_HOLD_SECONDS:120}
+
+logging.level.root=INFO
+logging.level.com.taptech.sse=DEBUG
+
 ```
 
 ### 5. Build Docker Image for Spring Boot App
@@ -354,24 +447,34 @@ Using the `kubernetes-maven-plugin` from jkube, create the image for your Spring
 
 ### 6. Start the Services and Run the Application
 
-Build the Spring Boot application and create Docker images:
-
-```bash
-mvn clean package
-docker-compose build
-```
 
 Start the services:
-
 ```bash
-docker-compose up
+./startServices.sh
+
 ```
 
-### 7. Producing and Consuming Events
+Start the app:
 
-In your Spring Boot application, you can now produce events to Kafka, and the Kafka consumer will stream them to Redis. You can use Kafka producers to send events to the "events" topic, and Redis clients to consume events from the "events-stream" Redis stream.
+```bash
+
+./start-sse-demo.sh
+```
+
+### 7. Connect to a stream using one of the ids in client-ids.json file 
+```shell
+http --stream GET http://localhost:8080/sse clientId==dd07bd51-1ab0-4e69-a0ff-f625fa9e7fc0
+```
+
+### 8. Generate some Events
+You can do an http POST to http://localhost:8080/sse/generateNE
+```shell
+http POST http://localhost:8080/sse/generateNE
+```
+After this watch as your http client recieves an event for the clientId that it is subscribed.
+
+
 
 ## Conclusion
 
-By following these steps, you've set up an event streaming architecture using Redis Streams and Kafka. This architecture allows you to efficiently produce, distribute, and consume events while leveraging the benefits of both Kafka and Redis.
-This solution demonstrates an event streaming architecture using Kafka and Redis Streams, implemented in a Spring Boot application. Kafka is used for event ingestion, while Redis Streams handle individual event streams. Docker is employed to containerize the components, making the deployment and management of the architecture easier. This setup allows for efficient real-time event processing and analytics, and it can be extended to meet specific business requirements.
+By following the steps outlined in this document, we have successfully implemented an event streaming architecture that takes events from Kafka, filters them based on a specific client ID, and forwards the relevant events to Redis using its Stream API. The SSE endpoint allows clients to receive real-time event updates, tailored to their respective client IDs. This solution provides an efficient and scalable way to handle event streaming for targeted clients.
