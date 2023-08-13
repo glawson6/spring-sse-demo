@@ -4,7 +4,7 @@ This document outlines a solution for streaming events from Kafka, forwarding th
 
 
 ## Problem Statement
-We have an existing Kafka infrastructure where events are being produced. Our goal is to set up a system that subscribes to Kafka messages but only processes events relevant to a specific client ID. These filtered events should be forwarded to Redis using its Stream API. Additionally, we need to establish an HTTP endpoint for Server-Sent Events (SSE) that allows the specified client to receive real-time event updates.
+Many companies have an existing Kafka infrastructure where events are being produced. Our goal is to set up a system that subscribes to Kafka messages but only processes events relevant to a specific client ID. These filtered events should be forwarded to Redis using its Stream API. Additionally, we need to establish an HTTP endpoint for Server-Sent Events (SSE) that allows the specified client to receive real-time event updates.
 
 
 
@@ -14,47 +14,15 @@ The architecture consists of the following components:
 
 1. **Kafka**: A distributed event streaming platform that allows you to publish and subscribe to streams of records (events).
 
-2. **Spring Boot**: A framework for building Java applications. We'll use it to create Kafka consumers and Redis Stream producers.Subscribes to Kafka messages, filters events based on the client ID, and forwards relevant events to Redis Streams.
+2. **Spring Boot**: A framework for building Java applications. We'll use it to create Kafka consumers and Redis Stream producers. Subscribes to Kafka messages, filters events based on the client ID, and forwards relevant events to Redis Streams.
 
-3. **Redis**: A high-performance, in-memory data store. We'll use its Streams feature to handle event streams.Stores the streamed events using its Streams API.
+3. **Redis**: A high-performance, in-memory data store. We'll use its Streams feature to handle event streams. Stores the streamed events using its Streams API.
 
-4. **Docker**: A containerization platform. We'll use Docker and Docker-Compose to create containers for Kafka, Redis, and our Spring Boot application.
+4. **Docker**: A containerization platform. We'll use Docker and Docker-Compose to create containers for Kafka, Redis, and our Spring Boot application.  We will utilize this for a local POT, POC.
 
 5. **HTTP Server-Sent Events (SSE) Endpoint**: Provides real-time event updates to the client, filtering events based on the client ID.
 
-```
-flowchart TB
-  subgraph Kafka
-    K
-  end
-
-  subgraph Spring Boot Application
-    B[[Kafka Reciever]]
-    C[[Redis Stream API]]
-    SSE[<u>Controller</u>]
-  end
-
-  subgraph Redis
-    R[<u>Redis</u>]
-  end
-
-  subgraph HTTP Client
-    HC[<u>HTTP Client</u>]
-  end
-
-  K --> |Events | B
-  B --> C
-  C --> R
-
-
-  HC -->|HTTP GET| SSE
-  SSE --> |SSE | HC
-  SSE --> C
-
-  ```
-
 ![Solution Architecture](reactive-streams-sse-demo.png "Solution Architecture")
-
 
 ## Redis Streams 
 Redis Streams is a feature in Redis that provides a way to handle real-time data streams with various use cases. Here are some scenarios where you might want to use Redis Streams:
@@ -82,7 +50,7 @@ Redis Streams is a feature in Redis that provides a way to handle real-time data
 - Docker and Docker Compose are installed.
 - Basic understanding of Spring Boot, Redis Streams, and Kafka.
 - Java 17 or higher
-- An http client of your choice. I used [httpie](https://httpie.io/docs/cli/installation)
+- An HTTP client of your choice. I used [httpie](https://httpie.io/docs/cli/installation)
 
 ## Steps
 
@@ -430,19 +398,39 @@ http --stream GET http://localhost:8080/sse clientId==dd07bd51-1ab0-4e69-a0ff-f6
 ```
 
 ### 8. Generate some Events
-You can do an http POST to http://localhost:8080/sse/generateNE
+You can do an HTTP POST to http://localhost:8080/sse/generateNE
 ```shell
 http POST http://localhost:8080/sse/generateNE
 ```
-After this watch as your http client recieves an event for the clientId that it is subscribed.
+After this watch as your HTTP client receives an event for the clientId that it is subscribed.
 
 ## Discussion
-A decision was made to limit the events being pushed into redis based on wether there was a client actually 
-expecting a message. If there were no clients then kafka messages were being filtered out.
+Why would you use Kafka and Redis? Does not Kafka offer this alone? Many companies have invested in Kafka as a backend message provider between their systems. Kafka in itself does not handle message selection very easily. 
+
+Message selection is not a typical feature provided natively by Kafka for a couple of reasons:
+
+1. **Data Size and Latency**: Kafka is designed for high-throughput, low-latency message processing. Its architecture focuses on distributing messages to a large number of consumers quickly. Introducing message selection based on arbitrary conditions can slow down the overall processing and introduce latency, which goes against Kafka's primary design goals.
+
+2. **Idempotency**: Kafka relies on the concept of idempotent producers and consumers. This means that if a consumer or producer retries a message due to a failure, it should not result in duplicate processing. Introducing selective message retrieval would complicate this idempotency guarantee, potentially leading to unintended duplicate processing.
+
+3. **Consumer Offset Tracking**: Kafka maintains consumer offsets, allowing consumers to keep track of the last processed message. If message selection is introduced, the concept of offsets becomes less straightforward, as some messages might be skipped based on selection criteria.
+
+4. **Decoupled Architecture**: Kafka is designed to decouple producers from consumers. Producers are unaware of consumer behavior, and consumers can independently decide what messages they want to consume. Message selection would break this decoupling, as producers would need to know which messages to produce based on specific consumer needs.
+
+5. **Consumer Flexibility**: Kafka consumers can be highly flexible in terms of message processing. They can be designed to filter, transform, and aggregate messages based on their own criteria. Introducing message selection at the Kafka level would limit this flexibility and make the system less adaptable to changing consumer requirements.
+
+6. **Scaling and Parallelism**: Kafka's scalability and parallelism benefits come from the ability to distribute messages across multiple partitions and allow multiple consumers to process messages in parallel. Selective message retrieval would complicate this parallelism, making it harder to distribute work efficiently.
+
+While Kafka itself doesn't provide native message selection features, it's essential to design the consumers to handle message filtering and selection if needed. Consumers can be designed to filter and process messages based on specific criteria, ensuring that only relevant messages are processed within the consumer application. This approach allows Kafka to maintain its core design principles while still providing the flexibility needed for various message-processing scenarios.
+
+Kafka could not essentially solve the problem in an easy way, which lead to pushing the messages to another persistent space that could easily select based on known criteria. This requirement leads to the decision to use Redis and allow pushing messages directly to Redis.
+
+A decision was made to limit the events being pushed into Redis based on whether there was a client actually 
+expecting a message. If there were no clients then Kafka messages were being filtered out.
 ```java
 	.filterWhen(record -> checkIfStreamBeingAccessed(record))
 ```
-The client registers the id so that the kafka listener will push the to redis stream. 
+The client registers the id so that the Kafka listener will push the to the Redis stream. 
 ```java
 .flatMap(id -> addIdToStream(clientId))
 ```
